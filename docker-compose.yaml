@@ -1,0 +1,16 @@
+version: "3.9"
+services:
+  app:
+    build: .
+    container_name: my-expenses
+    ports:
+      - "8080:80"          # фронт на http://localhost:8080
+    env_file:
+      - .env
+    environment:
+      - EXPENSE_DB=/app/data/expenses.sqlite3
+      - TZ=Europe/Podgorica
+    volumes:
+      - dbdata:/app/data   # сохраняем SQLite между рестартами
+volumes:
+  dbdata: {}
