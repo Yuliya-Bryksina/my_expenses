@@ -104,6 +104,8 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [error, setError] = useState("");
+  // flash toast when an item is added
+  const [flash, setFlash] = useState("");
 
   // --- Month navigation state ---
   const [currentMonth, setCurrentMonth] = useState(() => {
@@ -121,6 +123,19 @@ export default function App() {
   };
   const mStartSel = useMemo(() => startOfMonth(currentMonth), [currentMonth]);
   const mEndSel   = useMemo(() => endOfMonth(currentMonth),   [currentMonth]);
+
+  // --- Week navigation state ---
+  const [currentWeekStart, setCurrentWeekStart] = useState(() => startOfWeek(new Date()));
+  const prevWeek = () => setCurrentWeekStart(d => { const nd = new Date(d); nd.setDate(nd.getDate() - 7); return nd; });
+  const nextWeek = () => setCurrentWeekStart(d => { const nd = new Date(d); nd.setDate(nd.getDate() + 7); return nd; });
+  const weekLabel = (d) => {
+    const s = startOfWeek(d);
+    const e = endOfWeek(d); e.setDate(e.getDate() - 1); // показываем включительно до воскресенья
+    const fmt = (x) => x.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' }).replace('.', '');
+    return `${fmt(s)} — ${fmt(e)}`;
+  };
+  const wStartSel = useMemo(() => startOfWeek(currentWeekStart), [currentWeekStart]);
+  const wEndSel   = useMemo(() => endOfWeek(currentWeekStart),   [currentWeekStart]);
 
   useEffect(() => writeLS("exp_goals", goals), [goals]);
   useEffect(() => writeLS("exp_dark", dark), [dark]);
@@ -156,6 +171,12 @@ export default function App() {
     finally { setLoading(false); }
   }
 
+  function showToast(msg) {
+    setFlash(msg);
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(() => setFlash(""), 1600);
+  }
+
   async function addTx(tx) {
     // POST /expenses
     await apiFetch('/expenses', {
@@ -174,11 +195,14 @@ export default function App() {
       }
     });
     await refresh();
+    // show quick success toast
+    showToast("Позиция добавлена");
   }
 
   async function deleteTx(id) {
     await apiFetch(`/expenses/${id}`, { token, method: 'DELETE' });
     setTxs(prev => prev.filter(t => t.id !== id));
+    showToast("Позиция удалена");
   }
 
   async function deleteReceipt(batchId) {
@@ -191,7 +215,7 @@ export default function App() {
   const wStart = startOfWeek(now), wEnd = endOfWeek(now);
   const mStart = startOfMonth(now), mEnd = endOfMonth(now);
 
-  const spentWeek = useMemo(() => sumAmount(filterTx(txs, { type: "expense", from: wStart, to: wEnd })), [txs]);
+  const spentWeek = useMemo(() => sumAmount(filterTx(txs, { type: "expense", from: wStartSel, to: wEndSel })), [txs, wStartSel, wEndSel]);
   const spentMonth = useMemo(() => sumAmount(filterTx(txs, { type: "expense", from: mStartSel, to: mEndSel })), [txs, mStartSel, mEndSel]);
   const savedTotal = useMemo(() => sumAmount(txs.filter(t => t.type === "savings")), [txs]);
 
@@ -255,6 +279,11 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-950 text-slate-900 dark:text-slate-100">
       <div className="max-w-6xl mx-auto p-6">
+        {flash && (
+          <div className="fixed top-4 right-4 z-50 bg-emerald-600 text-white px-3 py-2 rounded-xl shadow">
+            {flash}
+          </div>
+        )}
         <header className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
             <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}>
@@ -284,7 +313,19 @@ export default function App() {
         {(token && chatId) && (
           <>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-              <KpiCard icon={<Wallet className="size-5"/>} title="Неделя" value={`${fmtMoney(spentWeek, goals.currency)} / ${fmtMoney(goals.weeklyBudget, goals.currency)}`} percent={weeklyPct} subtitle={`${(100 - weeklyPct).toFixed(0)}% лимита осталось`} />
+              <KpiCard
+                icon={<Wallet className="size-5"/>}
+                title={
+                  <div className="flex items-center gap-2">
+                    <IconButton title="Предыдущая неделя" onClick={prevWeek} className="p-1 h-7 w-7 leading-none">‹</IconButton>
+                    <span className="whitespace-nowrap">{weekLabel(currentWeekStart)}</span>
+                    <IconButton title="Следующая неделя" onClick={nextWeek} className="p-1 h-7 w-7 leading-none mr-3">›</IconButton>
+                  </div>
+                }
+                value={`${fmtMoney(spentWeek, goals.currency)} / ${fmtMoney(goals.weeklyBudget, goals.currency)}`}
+                percent={weeklyPct}
+                subtitle={`${(100 - weeklyPct).toFixed(0)}% лимита осталось`}
+              />
               <KpiCard
                 icon={<Calendar className="size-5"/>}
                 title={<div className="flex items-center gap-2">
@@ -337,6 +378,7 @@ export default function App() {
                   onEditItem={(id) => setEditingId(id)}
                   onRefresh={refresh}
                   onDeleteReceipt={deleteReceipt}
+                  onToast={showToast}
                 />
               </TabPanel>
 
@@ -441,7 +483,7 @@ function TabPanel({ forId, children }) { const [active, setActive] = useState(()
 
 // -------------------- App Components --------------------
 
-function ReceiptsTable({ receipts, onDeleteItem, onEditItem, currency, onRefresh, onDeleteReceipt }) {
+function ReceiptsTable({ receipts, onDeleteItem, onEditItem, currency, onRefresh, onDeleteReceipt, onToast }) {
   const [open, setOpen] = useState({}); // {batchId: boolean}
   const toggle = (id) => setOpen(o => ({ ...o, [id]: !o[id] }));
 
@@ -470,6 +512,7 @@ function ReceiptsTable({ receipts, onDeleteItem, onEditItem, currency, onRefresh
     if (!confirm('Удалить весь чек целиком? Это удалит все позиции.')) return;
     if (onDeleteReceipt) {
       await onDeleteReceipt(batchId);
+      onToast && onToast("Чек удалён");
       return;
     }
     const r = receipts.find(x => x.batchId === batchId);
@@ -577,10 +620,12 @@ function ReceiptsTable({ receipts, onDeleteItem, onEditItem, currency, onRefresh
                                     })()}
                                   </td>
                                   <td className="py-1 pl-3">
-                                    <div className="flex items-center gap-1">
-                                      <IconButton title="Редактировать" onClick={() => onEditItem(t.id)}><Edit3 className="size-4"/></IconButton>
-                                      <IconButton title="Удалить позицию" onClick={async () => { await onDeleteItem(t.id); onRefresh?.(); }}><Trash2 className="size-4"/></IconButton>
-                                    </div>
+                                    {r.source === 'qr' ? null : (
+                                      <div className="flex items-center gap-1">
+                                        <IconButton title="Редактировать" onClick={() => onEditItem(t.id)}><Edit3 className="size-4"/></IconButton>
+                                        <IconButton title="Удалить позицию" onClick={async () => { await onDeleteItem(t.id); onRefresh?.(); onToast && onToast("Позиция удалена"); }}><Trash2 className="size-4"/></IconButton>
+                                      </div>
+                                    )}
                                   </td>
                                 </tr>
                               ))}

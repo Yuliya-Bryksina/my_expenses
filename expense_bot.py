@@ -35,7 +35,27 @@ import requests
 from PIL import Image, ImageOps, ImageFilter, ImageEnhance
 from pyzbar.pyzbar import decode, ZBarSymbol
 from urllib.parse import urlparse, parse_qsl
+
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout
 from dotenv import load_dotenv
+
+# --- decoding watchdog ---
+DECODE_TIMEOUT_SEC = int(os.environ.get("DECODE_TIMEOUT_SEC", "15"))  # seconds
+_EXECUTOR = ThreadPoolExecutor(max_workers=2)
+
+def _try_decode_with_timeout(image_bytes: bytes, timeout: int = DECODE_TIMEOUT_SEC) -> Optional[str]:
+    """Run decode_any_code in a worker thread and bound the time we wait.
+    Returns decoded string or None on timeout/failure.
+    """
+    fut = _EXECUTOR.submit(decode_any_code, image_bytes)
+    try:
+        return fut.result(timeout=timeout)
+    except _FutTimeout:
+        logger.warning("decode timeout after %ss", timeout)
+        return None
+    except Exception:
+        logger.exception("decode failed")
+        return None
 
 # --- optional: Postgres support via psycopg ---
 try:
@@ -774,9 +794,9 @@ class ExpenseBot:
             data = tg_get_file(file_id)
             if not data:
                 return tg_send_message(chat_id, "Не удалось скачать файл.")
-            s = decode_any_code(data)
+            s = _try_decode_with_timeout(data)
             if not s:
-                return tg_send_message(chat_id, "Не удалось распознать код. Пришли фото как <b>файл</b> (без сжатия) и без перекрытий на коде.")
+                return tg_send_message(chat_id, f"Не удалось распознать код за {DECODE_TIMEOUT_SEC} сек. Пришли фото как <b>файл</b> (без сжатия) и без перекрытий на коде, либо попробуй ещё раз.")
             return self.handle_qr_url(s, user_id, chat_id)
 
         photos = msg.get("photo") or []
@@ -785,9 +805,9 @@ class ExpenseBot:
             data = tg_get_file(file_id)
             if not data:
                 return tg_send_message(chat_id, "Не удалось скачать фото.")
-            s = decode_any_code(data)
+            s = _try_decode_with_timeout(data)
             if not s:
-                return tg_send_message(chat_id, "QR-код не содержит ссылку. Пришли фото как <b>файл</b> (без сжатия).")
+                return tg_send_message(chat_id, f"Не удалось распознать код за {DECODE_TIMEOUT_SEC} сек или QR не содержит ссылку. Пришли фото как <b>файл</b> (без сжатия) и попробуй ещё раз.")
             return self.handle_qr_url(s, user_id, chat_id)
 
         return tg_send_message(chat_id, "Пришли фото/файл с QR/DM/Aztec или просто ссылку из кода.")
